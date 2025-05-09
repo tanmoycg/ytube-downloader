@@ -13,64 +13,71 @@ MY_NUM_FNAME_COMPONENTS = 6
 
 
 def main():
-    """ main function"""
-    name_of_songs = read_nameof_songs(MY_FILE_OF_SONGS)
-    print(name_of_songs)
-    cleanup_create(MY_DOWNLOAD_DIRECTORY)
-    url_of_songs = get_all_youtube_urls(name_of_songs)
-    downloaded_files = download_all_ytube_urls(url_of_songs)  
-    print(downloaded_files)          
-    print("All Dowmloading Processed") 
-    shortned_file_names = shorten_all_downloaded_file_names(MY_DOWNLOAD_DIRECTORY)  
-    print(shortned_file_names)      
-    print("Filenames Shortended ...Enjoy!!")
-    return 0
- 
+    try:
+        entries = read_nameof_songs(MY_FILE_OF_SONGS)
+        print(f"Found {len(entries)} entries to process")
+        
+        cleanup_create(MY_DOWNLOAD_DIRECTORY)
+        
+        url_entries = get_all_youtube_urls(entries)
+        print(f"Resolved {len(url_entries)} URLs")
+        
+        downloaded_files = download_all_ytube_urls(url_entries)
+        print(f"Successfully downloaded {len(downloaded_files)} files")
+        
+        short_names = shorten_all_downloaded_file_names(MY_DOWNLOAD_DIRECTORY)
+        print(f"Renamed {len(short_names)} files")
+        
+        return 0
+    except Exception as e:
+        print(f"Fatal error: {str(e)}")
+        return 1 
+
 def cleanup_create(directory):
-    """Removes/Creates the download directory. 
-    
-    Removes the download diretory if it exists along with all files  
-    or creates it,  if it does not exists
-
-    Args: 
-        directory: Name of the directory inside current directory where 
-        downloaded songs will be placed
-    
-    Returns: Nothing is returned to the caller
-
-    Raises: OSError if error occurs
-    """
     directory_path = os.path.join(Path.cwd(), directory)
-    if not os.path.exists(directory_path):
-        try:
-            os.makedirs(directory_path)
-            print(f"Directory '{directory_path}' successfully created")       
-        except OSError as e:
-            print(f"Error: {e}")
-    else:
-        # Remove the directory and its contents
+    if os.path.exists(directory_path):
         try:
             shutil.rmtree(directory_path)
-            print(f"Directory '{directory_path}' and all its contents \
-                  have been removed.")
-        except OSError as e:
-            print(f"Error: {e}")
-        
+            print(f"Removed existing directory: {directory_path}")
+            # Wait to ensure complete deletion
+            time.sleep(1)  
+        except Exception as e:
+            print(f"Cleanup failed: {e}")
+            raise  # Stop execution if cleanup fails
+    
+    try:
+        os.makedirs(directory_path, exist_ok=True)
+        print(f"Created fresh directory: {directory_path}")
+    except Exception as e:
+        print(f"Directory creation failed: {e}")
+        raise   
        
 def read_nameof_songs(textfile_song_names):
-    """Read name of song(s) names from text file.
+    """Read name of cotent (video/audio) from text file.
     
-    Read name of song(s) names from text file. The text file is assumed  
-    to be in the current working directory.
+    Read name of content from text file. The text file is assumed  
+    to be in the current working directory. The entires are in in 
+    the format "a contentname" or "v contentname". Either video or 
+    audio will be downloaded depending on "v" or "a" respectively.
 
     Args: 
         textfile_song_names: Name of the text file
     
-    Returns: A list holding the name of songs as strings
+    Returns: A list of dicts holding the name and type of content. 
     """
+    entries = []
     with open(textfile_song_names) as f:
-        my_list = list(f)
-        return [x.rstrip() for x in my_list]
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            # Split into type (first char) and query (rest of line)
+            content_type, query = line[0], line[1:].strip()
+            if content_type not in ('a', 'v'):
+                print(f"Invalid type '{content_type}' for query: '{query}'. Skipping.")
+                continue
+            entries.append({'type': content_type, 'query': query})
+    return entries
 
 def search_youtube(query, max_results=1):
     """Gets YouTube URL corresponsing to a query(song name)
@@ -94,52 +101,61 @@ def search_youtube(query, max_results=1):
         return None
 
 def get_all_youtube_urls(queries):
-    """Gets all YouTube URL's corresponsing to queries(song names)
+    """Gets all YouTube URL's corresponsing to queries
     
-    Uses ThreadPoolEcecutor to invoke function "search_youtube" for getting URL's of 
-    songs. The function "search_youtube" returns URL of a single song.
+    Uses ThreadPoolEcecutor to invoke function "search_youtube" for getting URL's. 
+    The function "search_youtube" returns URL of a single song/video.
     
     Args: 
-        queries (list): Name of songs stored in a list of strings.
+        queries (list of dict(s)): [{type, query}, ......]
             
-    Returns: URL's of the songs or empty list if no urls are found.
+    Returns: URL(s), type(v/a) of the entry(s) or empty list if no urls are found.
+    v: video, a: audio
     """
-    urls = []
+    entries = []
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(search_youtube, query): query for query in queries}
+        futures = {executor.submit(search_youtube, entry['query']): entry for entry in queries}
         for future in as_completed(futures):
+            entry = futures[future]
             try:
                 url = future.result()
                 if url:
-                    urls.append(url)
+                    entries.append({'type': entry['type'], 'url': url, 'query': entry['query']})
             except Exception as e:
-                query = futures[future]  # Look up the query that caused the error
-                print(f"Error fetching URL for '{query}': {e}")
-    return urls
+                print(f"Error fetching URL for '{entry['query']}': {e}")
+    return entries
 
-def download_all_ytube_urls(ytube_urls):
-    """Gets all YouTube URL's corresponsing to queries(song names)
+def download_all_ytube_urls(ytube_entries):
+    """Downloads all URLs with video/audio selection
     
-    Uses ThreadPoolEcecutor to invoke function "search_youtube" for getting URL's of 
-    songs. The function "search_youtube" returns URL of a single song.
+    Uses ThreadPoolEcecutor to invoke appropriate function to download 
+    audio/video corresponding to an entry.
     
     Args: 
-        ytube_urls (list): Name of URL's those are to be downloaded.
+        ytube_entries (list of dicts): URL, Type of Content 
             
     Returns: Absolute filenames of the downloaded files
     """
     downloaded_files = []
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(download_youtube_audio_as_mp3, 
-                    ytube_url):ytube_url for ytube_url in ytube_urls}
+        futures = {}
+        for entry in ytube_entries:
+            url = entry['url']
+            # Choose downloader based on type
+            downloader = (
+                download_youtube_video if entry['type'] == 'v' 
+                else download_youtube_audio_as_mp3
+            )
+            futures[executor.submit(downloader, url)] = entry['query']
+
         for future in as_completed(futures):
             try:
                 downloaded_file = future.result()
                 if downloaded_file:
                     downloaded_files.append(downloaded_file)
             except Exception as e:
-                ytube_url = futures[future]  # Look up the url that caused the error
-                print(f"Error fetching video for '{ytube_url}': {e}")
+                query = futures[future]
+                print(f"Error downloading '{query}': {e}")
     return downloaded_files
 
 def download_youtube_audio_as_mp3(youtube_url, output_path=MY_DOWNLOAD_DIRECTORY):
@@ -165,6 +181,14 @@ def download_youtube_audio_as_mp3(youtube_url, output_path=MY_DOWNLOAD_DIRECTORY
             'preferredcodec': 'mp3',  # Convert to mp3
             'preferredquality': '192',  # Bitrate
         }],
+        'noprogress': True,  # Cleaner output with threads
+        'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'skip': ['dash', 'hls'],  # Avoid fragmented streams
+                'player_client': ['android']  # Most stable
+    }
+}
     }
     
     # Download the video as audio using yt-dlp
@@ -176,6 +200,59 @@ def download_youtube_audio_as_mp3(youtube_url, output_path=MY_DOWNLOAD_DIRECTORY
      
     return file_name
 
+def download_youtube_video(youtube_url, output_path=MY_DOWNLOAD_DIRECTORY):
+    """Robust video downloader with fallback formats"""
+    ydl_opts = {
+        # Primary format selection (MP4)
+        'format': '(bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a])/best[ext=mp4]/best',
+        
+        # Fallback options
+        'format_sort': ['res:1080', 'ext:mp4'],  # Prefer 1080p MP4
+        'allow_multiple_video_streams': True,
+        'allow_multiple_audio_streams': True,
+        
+        # Network settings
+        'socket_timeout': 30,
+        'retries': 10,
+        'fragment_retries': 10,
+        'skip_unavailable_fragments': False,
+        
+        # Output
+        'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': False,
+        
+        # Bypass restrictions
+        'extractor_args': {
+            'youtube': {
+                'player_skip': ['js'],
+                'player_client': ['android', 'web']
+            }
+        },
+        
+        # External downloader
+        'external_downloader': 'aria2c',
+        'external_downloader_args': ['-x', '8', '-k', '1M']
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First try with standard options
+            try:
+                info = ydl.extract_info(youtube_url, download=True)
+                return info.get('requested_downloads', [{}])[0].get('filepath')
+            except yt_dlp.utils.DownloadError as e:
+                if "Requested format is not available" in str(e):
+                    # Fallback to simpler format
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    info = ydl.extract_info(youtube_url, download=True)
+                    return info.get('requested_downloads', [{}])[0].get('filepath')
+                raise
+    except Exception as e:
+        print(f"Video download failed for {youtube_url}: {str(e)}")
+        return None
+        
 def shorten_all_downloaded_file_names(download_dir):
     """Converts long filenames in the download directory to shorter names
     
@@ -206,30 +283,25 @@ def shorten_all_downloaded_file_names(download_dir):
     return short_file_names
 
 def shorten_downloaded_file_name(abs_path_out_file):
-    """Shortens a file name.
-    
-    The downloaded filenames are long. This function gets the absolute filename (pathname) 
-    from "shorten_all_downloaded_file_names". The file is then renamed to a shorter name.
-    The filename string is converted to a shorter string by calling the function 
-    "return_short_string"   
-         
-    Args: 
-        abs_path_out_file (string): Absolute path name of the file whose name is
-        shortended.
-                    
-    Returns: Converted filename (Should be shorter than the original filename)
-    """
     try:    
-        folder, downloaded_file_name_with_ext = os.path.split(abs_path_out_file)
-        only_filename, file_extension = os.path.splitext(downloaded_file_name_with_ext)
-        short_filename = return_short_string(MY_NUM_FNAME_COMPONENTS, only_filename)
-        new_file_name_with_ext =  short_filename + ".mp3"
-        new_abs_path_of_mp3_file = os.path.join(folder, new_file_name_with_ext)
-        os.rename(abs_path_out_file, new_abs_path_of_mp3_file)
-        return new_file_name_with_ext
-    except:
+        folder, filename = os.path.split(abs_path_out_file)
+        name, ext = os.path.splitext(filename)
+        short_name = return_short_string(MY_NUM_FNAME_COMPONENTS, name)
+        new_path = os.path.join(folder, f"{short_name}{ext}")  # Preserve original extension
+        
+        # Ensure no overwrite
+        if os.path.exists(new_path):
+            base, counter = new_path, 1
+            while os.path.exists(new_path):
+                new_path = f"{base}_{counter}{ext}"
+                counter += 1
+                
+        os.rename(abs_path_out_file, new_path)
+        return os.path.basename(new_path)
+    except Exception as e:
+        print(f"Error renaming {abs_path_out_file}: {e}")
         return None
-
+    
 def return_short_string(num_of_words, mystr):
   """Restricts the number of words in a string to "num_of_words"
 
