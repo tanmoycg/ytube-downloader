@@ -6,7 +6,10 @@ def search_youtube(query: str, max_results: int = 1) -> Optional[str]:
     """Searches YouTube and returns first video URL."""
     videos_search = VideosSearch(query, limit=max_results)
     results = videos_search.result()
-    return results['result'][0]['link'] if results['result'] else None
+    if not results.get('result'):
+        print(f"Could not resolve: {query}")
+        return None
+    return results['result'][0]['link']
 
 def get_all_youtube_urls(queries: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Batch-resolves YouTube URLs using threading."""
